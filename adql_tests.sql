@@ -124,25 +124,14 @@ select * from herschel.observations where ST_Covers(poly,ST_Point(10,10))='t' or
 select herschel.observations.*, ST_Distance(ST_Centroid(poly),ST_Point(84.912154,-69.652608)) as dist_to_centroid from herschel.observations where ST_Covers(poly,ST_Point(10,10))='t' or ST_Distance(poly,ST_Point(10,10)) <= 0.0;
 select * from a where (1=0) AND (2=1) ORDER BY cntr ASC;
 select '{a,b}' from c;
-select ARRAY[10,20] from c;
 select ARRAYNOT from c;
-select a[b] from c;
-select ((ARRAY[10,20])[1]) from c;
-select ARRAY[10,20][1], (ARRAY[10,20])[1],(ARRAY[10,20])[band][pass][info][5] from c;
-select right(band), left(band,2) from c;
-select ARRAY[10,20][band] * 1.0e-6 from c;
-select upper(band), lower(band), trim(band) from c;
-select mod(cast(foo as numeric),360.0) from c;
 select * from twomass.full_images where (ST_DWithin(twomass.full_images.poly,ST_Point(1, 1),0*111194.68229846345,'f'));
 SELECT schema_name as schemas FROM (select schema_name, min(table_index) as schema_index from TAP_SCHEMA.tables group by schema_name order by schema_index) as temp_schemas group by schemas order by schema_index;
 select schema_name from (select schema_name, min(table_index) as schema_index from TAP_SCHEMA.tables group by schema_name order by schema_index) temp_schemas;
 SELECT TAP_UPLOAD.pos.cntr as in_row_id FROM wise.wise_allwise_p3am_cdd, TAP_UPLOAD.pos WHERE (ST_Intersects(TAP_UPLOAD.pos.poly,wise.wise_allwise_p3am_cdd.poly)) ORDER BY in_row_id ASC, dist_to_bounds ASC;
 select CASEFULL from b;
-select CASE foo WHEN a THEN 'c' END from b;
-select CASE a WHEN 'b' THEN 'c' ELSE 'd' END from b;
-select CASE a WHEN 'b' THEN 'c' ELSE NULL END from b;
-select CASE a WHEN 'b' THEN 'c' when 'd' then 'e' ELSE 'f' END from b;
-select cast('Inf' as FLOAT8), cast('-Inf' as Float4) from foo;
+
+
 POINT('foo',10 20);
 POINT('foo',1.0, 20);
 POINT('foo',10 ,-2.0);
