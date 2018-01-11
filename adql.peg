@@ -1,0 +1,689 @@
+/// A PEG grammar suitable for directly putting into PEGjs.
+
+queries = (space* query space* ';')* space*
+
+unqualified_schema_name = identifier
+
+correlation_name = identifier
+correlation_specification = ("AS"i space)? space* correlation_name
+
+/// The spec says to have correlation_name as an alternate, but
+/// table_name matches everything that correlation name matches,
+/// so correlation_name will never match.
+qualifier_string = table_name
+
+/// We use a separate tap_upload rule because we do not allow
+/// tap_upload's in the table's part of the geometry
+
+tap_upload = "TAP_UPLOAD." tap_upload_identifier
+
+/// We have to put the tap_upload_identifier into its own rule
+/// instead of folding it in with tap_upload, because otherwise it
+/// starts matching the whole string column expression instead of
+/// just this column reference.
+
+tap_upload_identifier = identifier
+
+/// I have to manually expand the possibilities in
+/// column_reference and table name, because a catalog.schema can
+/// match against schema.table or table.column, gobbling up the
+/// table or column name and making the parse fail.
+table_name =
+  tap_upload
+  / (catalog_name_string '.' unqualified_schema_name '.' identifier)
+  / (unqualified_schema_name '.' identifier)
+  / identifier
+
+/// column_reference_string is not in the BNF.  The difference is that
+/// column_reference_string can have tap_upload, while
+/// column_reference can not.
+
+column_reference_string =
+  (tap_upload '.' identifier)
+  / (catalog_name_string '.' unqualified_schema_name
+     '.' identifier '.' identifier)
+  / (unqualified_schema_name '.' identifier '.' identifier)
+  / (identifier '.' identifier)
+  / identifier
+catalog_name_string = identifier
+
+catalog_schema_qualifier_column =
+  identifier '.' identifier '.' identifier '.' identifier
+
+schema_qualifier_column = identifier '.' identifier '.' identifier
+
+qualifier_column = (tap_upload / identifier) '.' identifier
+
+column_reference =
+  catalog_schema_qualifier_column
+  / schema_qualifier_column
+  / qualifier_column
+  / identifier
+
+/// This puts term and numeric_value_expression on the left, not
+/// right.  Otherwise the rule greedily recurses on itself and
+/// runs out of stack space.  With that reordering, the first term
+/// is always the same and the second part becomes optional.
+term = factor (space* ('*' / '/') space* term)?
+numeric_value_expression =
+  term (space* ('+' / '-') space* numeric_value_expression)?
+
+// FIXME: string_value_function should have a string_geometry_function
+string_value_function = user_defined_function
+/// Flipped the order here because a value_expression_primary can
+/// match a function name that should be matched by
+/// string_value_function
+character_primary = string_value_function / value_expression_primary
+character_factor = character_primary
+concatenation_operator = '||'
+/// Flip the order of character_factor and
+/// character_value_expression to prevent recursion.
+character_value_expression = character_factor
+   (space* concatenation_operator space* character_value_expression)?
+
+string_value_expression = character_value_expression
+
+/// Custom array_expression so that SQL 99 array literals can pass
+/// through
+array_value_constructor_by_enumeration =
+  'ARRAY'i space* '['
+  (space* value_expression (space* ',' space* value_expression)*)?
+  space* ']'
+
+// FIXME: value_expression should also have a
+// geometry_value_expression, but the database can not handle it.
+
+/// This expression first checks for a concatenation operator.
+/// Otherwise a numeric_value_expression would match the first
+/// half of a concatenation, meaning the concatenation operator
+/// would cause the parse to fail.  We can not put
+/// string_value_expression first, because that would partially
+/// match arithmetic.  For 'a+b', it matches 'a' but not the '+'.
+
+concatenation_expression = character_factor space* concatenation_operator
+ space* character_value_expression
+
+value_expression = concatenation_expression
+  / numeric_value_expression / string_value_expression
+
+column_name = identifier
+
+as = value_expression space* 'AS'i space+ column_name
+
+select_non_as_item = (qualifier_string '.*') / value_expression
+select_item = as / select_non_as_item
+select_list = select_item (space* ',' space* select_item)*
+
+/// FIXME: This does not allow "select *,ra from table"?
+columns = '*' / select_list
+set_function_type = 'AVG'i / 'MAX'i / 'MIN'i
+  / 'SUM'i / 'COUNT'i
+set_quantifier = ('DISTINCT'i / 'ALL'i)
+  &space
+/// The '&nonidentifier_character' after set_function_type allows us
+/// to fail immediately if we get a set_function that does not have a
+/// parenthesis.
+general_set_function =
+  set_function_type &nonidentifier_character
+  space* '('
+  (space* set_quantifier)?
+  space* value_expression space* ')'
+
+set_function_specification
+= ('COUNT'i space* '(' space* '*' space* ')')
+  / general_set_function
+
+case_operand = value_expression
+when_operand = value_expression
+result_expression = value_expression
+result = result_expression / 'NULL'i
+simple_when_clause = 'WHEN'i
+  space+ when_operand
+  space+ 'THEN'i
+  space+ result
+else_clause = 'ELSE'i space+ result
+
+simple_case = 'CASE'i
+  space+ case_operand
+  (space+ simple_when_clause)+
+  (space+ else_clause)?
+  space+ 'END'i
+
+/// Do not support case_abbreviation or searched case
+case_specification = simple_case
+case_expression = case_specification
+
+/// The BNF for SQL 99 uses an array_element_reference intermediate
+/// rule.  However, that rule first checks for value_expression, so
+/// you get an infinite recursion because it keeps matching the
+/// value_expression part of the array element.  So instead we
+/// implement array elements as optional decorators after an expression.
+value_expression_primary =
+  (array_value_constructor_by_enumeration
+   / unsigned_value_specification
+   / column_reference_string
+   / set_function_specification
+   / case_expression
+   / ('(' value_expression ')'))
+  (space* '[' space* numeric_value_expression space* ']')*
+
+trig_function = (('ACOS'i
+                  / 'ASIN'i
+                  / 'ATAN'i
+                  / 'COS'i
+                  / 'COT'i
+                  / 'SIN'i
+                  / 'TAN'i)
+                 &nonidentifier_character)
+  space* '('
+  space* numeric_value_expression
+  space* ')'
+  / ('ATAN2'i &nonidentifier_character space* '('
+     space* numeric_value_expression space* ','
+     space* numeric_value_expression space* ')')
+
+math_function = (('ABS'i
+                  / 'CEILING'i
+                  / 'DEGREES'i
+                  / 'EXP'i
+                  / 'FLOOR'i
+                  / 'LOG10'i
+                  / 'LOG'i
+                  / 'RADIANS'i
+                  / 'SQRT'i)
+                 &nonidentifier_character
+                 space* '('
+                 space* numeric_value_expression
+                 space* ')')
+  / (('MOD'i / 'POWER'i)
+     &nonidentifier_character
+     space* '('
+     space* numeric_value_expression
+     space* ','
+     space* numeric_value_expression
+     space* ')')
+  / ('PI'i &nonidentifier_character
+     space* '(' space* ')')
+  / ('RAND'i &nonidentifier_character
+     space* '('  numeric_value_expression? ')')
+  / (('ROUND'i / 'TRUNCATE'i) &nonidentifier_character
+     space* '('
+     space* numeric_value_expression
+     (space* ',' space* signed_integer)?
+     space* ')')
+
+/// default_function_prefix is a bit useless since it is optional.
+default_function_prefix = 'udf_'
+/// Add a bunch of functions that are normally reserved words, but
+/// also really useful string functions (at least in Postgres)
+user_defined_function_name = default_function_prefix?
+  (regular_identifier
+   / 'RIGHT'i
+   / 'LEFT'i
+   / 'UPPER'i
+   / 'LOWER'i
+   / 'TRIM'i)
+user_defined_function_param = value_expression
+user_defined_function = user_defined_function_name
+  space* '('
+  (space* user_defined_function_param
+    (space* ',' space* user_defined_function_param)*)?
+  space* ')'
+
+/// Special case casting to numeric, since some functions
+/// (e.g. mod()) only take numeric arguments, not double precision.
+cast_function = 'CAST'i space* '('
+  space* value_expression
+  space+ 'AS'i
+  space+ ('NUMERIC'i / 'FLOAT4'i / 'FLOAT8'i)
+  space* ')'
+// FIXME: numeric_value_function should have
+// numeric_geometry_function
+numeric_value_function = trig_function / math_function / cast_function
+  / user_defined_function
+/// Flipped the order here, because a value_expression can match a
+/// function name.
+numeric_primary = numeric_value_function / value_expression_primary
+factor = sign? numeric_primary
+coord_sys = '\''
+  (space* ('J2000'i / 'GALACTIC'i / 'ICRS'i))?
+  (space* 'GEOCENTER'i)?
+  space*'\''
+
+column_or_number = column_reference / double
+coord = column_or_number space* ',' space* column_or_number
+point = 'POINT'i
+  space* '('
+  space* coord_sys
+  space* ','
+  space* coord
+  space* ')'
+point_or_column = point / column_reference
+
+// FIXME: In theory, the radius should be an expression, not a
+// number.  In practice, we can only handle numbers.
+circle = 'CIRCLE'i
+  space* '(' space*
+  coord_sys
+  space* ','
+  space* coord
+  space* ','
+  space* column_or_number
+  space* ')'
+ellipse = 'ELLIPSE'i
+  space* '('
+  space* coord_sys
+  space* ','
+  space* coord
+  space* ','
+  space* column_or_number
+  space* ','
+  space* column_or_number
+  space* ','
+  space* column_or_number
+  space* ')'
+box = 'BOX'i
+  space* '('
+  space* coord_sys
+  space* ','
+  space* coord
+  space* ','
+  space* column_or_number
+  space* ','
+  space* column_or_number
+  space* ')'
+coord_list = coord (space* ',' space* coord)*
+polygon = 'POLYGON'i space*
+  '(' space* coord_sys
+  space* ','
+  space* coord_list
+  space* ')'
+
+shape = point / circle / box / ellipse / polygon
+contains = 'CONTAINS'i
+  space* '('
+  space* point_or_column
+  space* ','
+  space* shape
+  space* ')'
+intersects = 'INTERSECTS'i
+  space* '('
+  space* column_reference
+  space* ','
+  space* shape space* ')'
+
+geometry = ((contains / intersects) (space* '=' space* '1')?)
+  / ('1' space* '=' space* (contains / intersects))
+keyword = (ADQL_reserved_word / SQL_reserved_word) &(!identifier_character)
+
+simple_Latin_letter = [a-zA-Z]
+identifier_character = digit / simple_Latin_letter / '_'
+/// nonidentifier_character is to signal that, for example, in an
+/// AND, clause, AND is followed by something that is not an
+/// identifier (e.g. a space or parentheses).
+nonidentifier_character = &(!identifier_character) char
+all_identifiers = simple_Latin_letter identifier_character*
+regular_identifier = &(!keyword) all_identifiers
+
+nondoublequote_character = &(!'"') char
+delimited_identifier_part = nondoublequote_character / '""'
+delimited_identifier_body = delimited_identifier_part+
+delimited_identifier = '"' delimited_identifier_body '"'
+
+identifier = regular_identifier / delimited_identifier
+
+join_specification = join_condition / named_columns_join
+
+join_condition = 'ON'i space+ search_condition
+
+named_columns_join = 'USING'i space+ '('
+  space* join_column_list space* ')'
+
+join_column_list = column_name_list
+
+column_name_list = column_name (space* ',' space* column_name)*
+
+table_correlation = table_name (space* correlation_specification)?
+
+outer_join = ('LEFT'i / 'RIGHT'i / 'FULL'i) &space
+  (space* 'OUTER'i &space)?
+
+join_type = 'INNER'i / outer_join
+
+join_suffix =
+  ('NATURAL'i space+)?
+  (join_type space+)?
+  'JOIN'i space+
+  table_reference (space* join_specification)?
+
+qualified_join = (('(' space* joined_table space* ')')
+                  / table_correlation)
+  (space* join_suffix)+
+
+joined_table = qualified_join / ('(' space* joined_table space* ')')
+digit = [0-9]
+unsigned_integer = digit+
+exact_numeric_literal = (unsigned_integer ('.' unsigned_integer)?)
+  / ('.' unsigned_integer)
+
+sign = '+' / '-'
+signed_integer = sign? unsigned_integer
+mantissa = exact_numeric_literal
+exponent = signed_integer
+approximate_numeric_literal = mantissa ('E' / 'e') exponent
+unsigned_numeric_literal = approximate_numeric_literal / exact_numeric_literal
+
+double = sign? unsigned_numeric_literal
+
+quote = '\''
+literal_space = ' '
+newline = '\n'
+tab = '\t'
+minus_sign = '-'
+char = .
+
+nonquote_character = &(!quote) char
+character_representation = nonquote_character / '\'\''
+
+comment_introducer = minus_sign minus_sign+
+comment_character = &(!newline) char 
+comment = comment_introducer comment_character* newline
+
+separator = comment / literal_space / newline
+space = separator
+
+/// String literals are implicitly concatenated when placed next to each other
+character_string_literal= quote character_representation* quote
+  (separator+ quote character_representation* quote)*
+
+general_literal = character_string_literal
+unsigned_literal = unsigned_numeric_literal / general_literal
+unsigned_value_specification = unsigned_literal
+derived_correlation = subquery space* correlation_specification
+
+table_reference = joined_table / table_correlation / derived_correlation
+
+from_clause = 'FROM'i space+
+  table_reference (space* ',' space* table_reference)*
+
+comparison_predicate = value_expression
+  space* ('=' / '!=' / '<>' / '<=' / '>=' / '<' / '>')
+  space* value_expression
+
+between_predicate = value_expression &space
+  (space* 'NOT'i &space)?
+  space* 'BETWEEN'i &space
+  space* value_expression &space
+  space* 'AND'i &space
+  space* value_expression
+
+in_predicate = value_expression &space
+  (space* 'NOT'i &space)?
+  space* 'IN'i &space
+  space* (subquery
+          / ('(' space* (value_expression (space* ',' space* value_expression)*)
+             space* ')'))
+
+null_predicate = value_expression
+  space* ('IS'i &space)
+  (space* 'NOT'i &space)?
+  space* 'NULL'i
+
+match_value = character_value_expression
+pattern = character_value_expression
+
+like_predicate = match_value
+  (space* 'NOT'i &space)?
+  space* 'LIKE'i space+ pattern
+
+exists_predicate= 'EXISTS'i space+ subquery
+
+predicate = comparison_predicate / between_predicate / in_predicate
+  / null_predicate / like_predicate / exists_predicate
+where = 'WHERE'i &space
+  space* ((geometry (space* 'AND'i
+                     space* '('
+                     space* search_condition
+                     space* ')')?)
+          / ('(' space* search_condition space* ')'
+             space+ ('AND'i space+ geometry))
+          / search_condition)
+
+where_no_geometry = 'WHERE'i space+ search_condition
+
+grouping_column_reference = column_reference_string
+grouping_column_reference_list = grouping_column_reference
+  (space* ',' space* column_reference_string)*
+group_by_clause = 'GROUP'i &space
+  space* 'BY'i &space
+  space* grouping_column_reference_list
+
+having_clause = 'HAVING'i &space
+  space* search_condition
+
+sort_key = column_name / unsigned_integer
+ordering_specification = 'ASC'i / 'DESC'i
+/// I have the vague feeling that there are cases where there are
+/// no spaces between the sort_key and ordering_specification, but
+/// I can not think of any.
+sort_specification = sort_key (space+ ordering_specification)?
+sort_specification_list = sort_specification
+   (space* ',' space* sort_specification)*
+order_by_clause = 'ORDER'i &space
+  space* 'BY'i &space
+  space* sort_specification_list
+
+query = 'SELECT'i
+  (space+ set_quantifier)?
+  (space+ 'TOP'i space+ unsigned_integer)?
+  space+ columns
+  space+ from_clause
+  (space+ where)?
+  (space+ group_by_clause)?
+  (space+ having_clause)?
+  (space+ order_by_clause)?
+
+query_no_geometry = 'SELECT'i
+  (space+ set_quantifier)?
+  (space+ 'TOP'i space+ unsigned_integer)?
+  space+ columns
+  space+ from_clause
+  (space+ where_no_geometry)?
+  (space+ group_by_clause)?
+  (space+ having_clause)?
+  (space+ order_by_clause)?
+
+subquery = '(' space* (query_no_geometry / joined_table) space* ')'
+/// Reverse sort to avoid early matches.
+ADQL_reserved_word = 'TRUNCATE'i / 'TOP'i
+                        / 'TAP_UPLOAD'i / 'TAN'i
+                        / 'SQRT'i / 'SIN'i
+                        / 'ROUND'i / 'REGION'i
+                        / 'RAND'i / 'RADIANS'i
+                        / 'POWER'i / 'POLYGON'i
+                        / 'POINT'i / 'PI'i
+                        / 'MOD'i / 'LOG10'i
+                        / 'LOG'i / 'INTERSECTS'i
+                        / 'FLOOR'i / 'EXP'i
+                        / 'DISTANCE'i
+                        / 'DEGREES'i / 'COS'i
+                        / 'COORDSYS'i / 'COORD2'i
+                        / 'COORD1'i / 'CONTAINS'i
+                        / 'CIRCLE'i / 'CENTROID'i
+                        / 'CEILING'i / 'BOX'i
+                        / 'ATAN2'i / 'ATAN'i
+                        / 'ASIN'i / 'AREA'i
+                        / 'ACOS'i / 'ABS'i
+
+/// Split up SQL_reserved_word to help memory usage and compile times.
+SQL_reserved_word_00 = 'ZONE'i / 'YEAR'i
+                          / 'WRITE'i / 'WORK'i
+                          / 'WITH'i / 'WHERE'i
+                          / 'WHENEVER'i / 'WHEN'i
+                          / 'VIEW'i / 'VARYING'i
+                          / 'VARCHAR'i
+                          / 'VALUES'i / 'VALUE'i
+                          / 'USING'i / 'USER'i
+                          / 'USAGE'i
+
+SQL_reserved_word_01
+      = 'UPPER'i / 'UPDATE'i
+         / 'UNKNOWN'i / 'UNIQUE'i
+         / 'UNION'i / 'TRUE'i
+         / 'TRIM'i / 'TRANSLATION'i
+         / 'TRANSLATE'i / 'TRANSACTION'i
+         / 'TRAILING'i / 'TO'i
+         / 'TIMEZONE_MINUTE'i / 'TIMEZONE_HOUR'i
+         / 'TIMESTAMP'i
+
+SQL_reserved_word_02
+      = 'TIME'i / 'THEN'i
+         / 'TEMPORARY'i / 'TABLE'i
+         / 'SYSTEM_USER'i / 'SUM'i
+         / 'SUBSTRING'i / 'SQLSTATE'i
+         / 'SQLERROR'i / 'SQLCODE'i
+         / 'SQL'i / 'SPACE'i
+         / 'SOME'i / 'SMALLINT'i
+         / 'SIZE'i / 'SET'i
+
+SQL_reserved_word_03
+      = 'SESSION_USER'i / 'SESSION'i
+         / 'SELECT'i / 'SECTION'i
+         / 'SECOND'i / 'SCROLL'i
+         / 'SCHEMA'i / 'ROWS'i
+         / 'ROLLBACK'i / 'RIGHT'i
+         / 'REVOKE'i / 'RESTRICT'i
+         / 'RELATIVE'i / 'REFERENCES'i
+         / 'REAL'i / 'READ'i
+
+SQL_reserved_word_10
+      = 'PUBLIC'i / 'PROCEDURE'i
+         / 'PRIVILEGES'i / 'PRIOR'i
+         / 'PRIMARY'i / 'PRESERVE'i
+         / 'PREPARE'i / 'PRECISION'i
+         / 'POSITION'i / 'PARTIAL'i
+         / 'PAD'i / 'OVERLAPS'i
+         / 'OUTPUT'i / 'OUTER'i
+         / 'ORDER'i / 'OR'i
+
+SQL_reserved_word_11
+      = 'OPTION'i / 'OPEN'i
+         / 'ONLY'i / 'ON'i / 'OF'i
+         / 'OCTET_LENGTH'i / 'NUMERIC'i
+         / 'NULLIF'i / 'NULL'i
+         / 'NOT'i / 'NO'i
+         / 'NEXT'i / 'NCHAR'i
+         / 'NATURAL'i / 'NATIONAL'i
+
+SQL_reserved_word_12 = 'NAMES'i / 'MONTH'i
+                          / 'MODULE'i / 'MINUTE'i
+                          / 'MIN'i / 'MAX'i
+                          / 'MATCH'i / 'LOWER'i
+                          / 'LOCAL'i / 'LIKE'i
+                          / 'LEVEL'i / 'LEFT'i
+                          / 'LEADING'i / 'LAST'i
+                          / 'LANGUAGE'i / 'KEY'i
+
+SQL_reserved_word_13
+      = 'JOIN'i / 'ISOLATION'i
+         / 'IS'i / 'INTO'i
+         / 'INTERVAL'i / 'INTERSECT'i
+         / 'INTEGER'i / 'INT'i
+         / 'INSERT'i / 'INSENSITIVE'i
+         / 'INPUT'i / 'INNER'i
+         / 'INITIALLY'i / 'INDICATOR'i
+         / 'IN'i / 'IMMEDIATE'i
+
+SQL_reserved_word_20 = 'IDENTITY'i / 'HOUR'i
+                          / 'HAVING'i / 'GROUP'i
+                          / 'GRANT'i / 'GOTO'i
+                          / 'GO'i / 'GLOBAL'i
+                          / 'GET'i / 'FULL'i
+                          / 'FROM'i / 'FOUND'i
+                          / 'FOREIGN'i / 'FOR'i
+                          / 'FLOAT'i / 'FIRST'i
+
+SQL_reserved_word_21
+      = 'FETCH'i / 'FALSE'i
+         / 'EXTRACT'i / 'EXTERNAL'i
+         / 'EXISTS'i / 'EXECUTE'i
+         / 'EXEC'i / 'EXCEPTION'i
+         / 'EXCEPT'i / 'ESCAPE'i
+         / 'END-EXEC'i / 'END'i
+         / 'ELSE'i / 'DROP'i
+         / 'DOUBLE'i / 'DOMAIN'i
+
+SQL_reserved_word_22
+      = 'DISTINCT'i / 'DISCONNECT'i
+         / 'DIAGNOSTICS'i / 'DESCRIPTOR'i
+         / 'DESCRIBE'i / 'DESC'i
+         / 'DELETE'i / 'DEFERRED'i
+         / 'DEFERRABLE'i / 'DEFAULT'i
+         / 'DECLARE'i / 'DECIMAL'i
+         / 'DEALLOCATE'i / 'DAY'i
+         / 'DATE'i / 'CURSOR'i
+
+SQL_reserved_word_23
+      = 'CURRENT_USER'i / 'CURRENT_TIMESTAMP'i
+         / 'CURRENT_TIME'i / 'CURRENT_DATE'i
+         / 'CURRENT'i / 'CROSS'i
+         / 'CREATE'i / 'COUNT'i
+         / 'CORRESPONDING'i / 'CONVERT'i
+         / 'CONTINUE'i / 'CONSTRAINTS'i
+         / 'CONSTRAINT'i / 'CONNECTION'i
+         / 'CONNECT'i / 'COMMIT'i
+
+SQL_reserved_word_30
+      = 'COLUMN'i / 'COLLATION'i
+         / 'COLLATE'i / 'COALESCE'i
+         / 'CLOSE'i / 'CHECK'i
+         / 'CHAR_LENGTH'i / 'CHARACTER_LENGTH'i
+         / 'CHARACTER'i / 'CHAR'i
+         / 'CATALOG'i / 'CAST'i
+         / 'CASE'i / 'CASCADED'i
+         / 'CASCADE'i / 'BY'i
+
+SQL_reserved_word_31 = 'BOTH'i / 'BIT_LENGTH'i
+                          / 'BIT'i / 'BETWEEN'i
+                          / 'BEGIN'i / 'AVG'i
+                          / 'AUTHORIZATION'i
+                          / 'AT'i / 'ASSERTION'i
+                          / 'ASC'i / 'AS'i
+                          / 'ARE'i / 'ANY'i
+                          / 'AND'i / 'ALTER'i
+                          / 'ALLOCATE'i
+
+SQL_reserved_word_32 = 'ALL'i / 'ADD'i
+                          / 'ACTION'i
+                          / 'ABSOLUTE'i
+
+SQL_reserved_word_0 = SQL_reserved_word_00 / SQL_reserved_word_01
+                         / SQL_reserved_word_02 / SQL_reserved_word_03
+
+SQL_reserved_word_1 = SQL_reserved_word_10 / SQL_reserved_word_11
+                         / SQL_reserved_word_12 / SQL_reserved_word_13
+
+SQL_reserved_word_2 = SQL_reserved_word_20 / SQL_reserved_word_21
+                         / SQL_reserved_word_22 / SQL_reserved_word_23
+
+SQL_reserved_word_3 = SQL_reserved_word_30 / SQL_reserved_word_31
+                         / SQL_reserved_word_32
+
+SQL_reserved_word = SQL_reserved_word_0 / SQL_reserved_word_1
+                       / SQL_reserved_word_2 / SQL_reserved_word_3
+
+boolean_literal = 'True'i / 'False'i
+
+boolean_value_expression = boolean_literal / user_defined_function
+
+boolean_primary = predicate
+  / ('(' space* search_condition space* ')')
+  / boolean_value_expression
+
+boolean_factor = ('NOT'i &space)? space* boolean_primary
+
+boolean_term = boolean_factor
+  space+ ('AND'i / 'OR'i)
+  space+ search_condition
+
+search_condition = boolean_term / boolean_factor
