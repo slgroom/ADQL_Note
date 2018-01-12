@@ -1,0 +1,91 @@
+Rationale
+=========
+
+ADQL 2.0 makes significant requirements on web service back ends if
+they want to support geometry.  In particular, there is an assumption
+that the data is stored in a relational database that has extensive
+geometric support.  At present, full support only exists on two
+platforms: Postgres with pgSphere, and maybe SQL Server with spatial
+extensions? (TODO: Check with MAST if they support full syntax)
+
+This can be problematic for some data providers who wish to use other
+data stores, even if it is a relatonal engine such as Oracle, MySQL,
+Firebase, or SQLite.  This is true even if they are using any of the
+panopoly of GIS implementations.  ADQL requires more functions than
+are part of the GIS standard.
+
+It gets even more problematic if the data providers want to use a
+specialized format that is optimized for spatial searches.
+
+The purpose of this note is to recommend a subset of geometry
+capabilities that can be more widely supported.  The basic idea is to
+segregate the geometric and non-geometric parts of the queries.  In
+addition, the geometric parts are also simplified.  This does not
+result in any significant reduction of capability.  For example, all
+of the ObsCore use cases are still covered.
+
+Modified Grammar
+================
+
+We modified the PEG grammar of ADQL (adql.peg) to create gadql.peg.
+The changes are
+
+1) Remove the STRING_GEOMETRY_FUNCTION rule from the
+   STRING_VALUE_FUNCTION rule.  This also involves removing the
+   EXTRACT_COORDSYS rule.
+
+2) Remove the GEOMETRY_VALUE_EXPRESSION rule from VALUE_EXPRESSION.
+
+3) Remove the NUMERIC_GEOMETRY_FUNCTION rule from NUMERIC_VALUE_FUNCTION.
+
+4) Require all COORDINATES to be either numeric literals or column names.
+
+5) Remove the CENTROID, REGION, COORD1, and COORD2 rules.  These are
+   not supported by GIS and not required for ObsCore support.
+
+6) Remove the AREA and DISTANCE rules.  These can be mostly replaced
+   with judicious use of the INTERSECTS rule.
+
+7) Remove the CONTAINS rule.  The simplest case of a point inside a
+   circle or polygon, can be replaced with INTERSECTS.  The more
+   complicated cases (polygon inside polygon) are not supported by GIS
+   backends.
+
+8) For the arguments to INTERSECTS, they must be either column names
+   or shape literals.  In turn, the shape literals must be composed of
+   either numeric literals or column names
+   (e.g. POINT('J2000',210.8021726,54.3487903) or
+   CIRCLE('J2000',ra,dec,r)).  Note that even though this technically
+   allows nonsense expressions like CIRCLE('J2000',dec,ra,r), the
+   backend may instead return an error.
+
+9) Make two variants of the WHERE rule: WHERE and where_no_geometry.
+   For the rule with geometry, the geometric parts are constrained to
+   be cleanly segregated from the rest of the WHERE clause and consist
+   entirely of an INTERSECTS rule.
+
+10) Make two variants of the QUERY rule: one with geometry and one
+    without.  SUBQUERY's can only use the non-geometric version.
+
+
+Taken together, these restrictions make it possible to fully implement
+a backend using an off-the-shelf GIS backend.
+
+Removing many of the geometric functions and separating the query into
+two parts mean that the geometrical part can be handled by an
+optimized spatial data store.  The result can then be fed to an SQL
+data store where the non-geometric clause is applied.
+
+ObsCore Use Cases
+=================
+
+TODO
+
+Conclusion
+==========
+
+We present a proposed modification to the ADQL grammar that restricts
+and simplifies the geometry rules.  IRSA has been using this
+restricted form of the ADQL grammar for several years, and users have
+never asked for any functionality that would have been covered by the
+full geometric rules.
