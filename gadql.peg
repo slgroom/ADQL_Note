@@ -222,9 +222,9 @@ geometry_value_function = point / circle / box / polygon
 /// CHANGE: Only allow column references or literal points
 intersects = 'INTERSECTS'i
   space* '('
-  space* coord_value
+  space* geometry_value_function
   space* ','
-  space* geometry_value_function space* ')'
+  space* column_name space* ')'
 
 /// CHANGE: Only have intersects
 predicate_geometry_function = intersects
