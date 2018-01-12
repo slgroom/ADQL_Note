@@ -6,7 +6,7 @@ they want to support geometry.  In particular, there is an assumption
 that the data is stored in a relational database that has extensive
 geometric support.  At present, full support only exists on two
 platforms: Postgres with pgSphere, and maybe SQL Server with spatial
-extensions? (TODO: Check with MAST if they support full syntax)
+extensions? (FIXME: Check with MAST if they support full syntax)
 
 This can be problematic for some data providers who wish to use other
 data stores, even if it is a relatonal engine such as Oracle, MySQL,
@@ -51,18 +51,40 @@ The changes are
    complicated cases (polygon inside polygon) are not supported by GIS
    backends.
 
-8) For the arguments to INTERSECTS, they must be either column names
-   or shape literals.  In turn, the shape literals must be composed of
+8) For the first argument to INTERSECTS, it must be either a column name
+   or a shape literal.  In turn, the shape literals must be composed of
    either numeric literals or column names
    (e.g. POINT('J2000',210.8021726,54.3487903) or
-   CIRCLE('J2000',ra,dec,r)).  Note that even though this technically
-   allows nonsense expressions like CIRCLE('J2000',dec,ra,r), the
-   backend may instead return an error.
+   CIRCLE('J2000',ra,dec,r)).
 
-9) Make two variants of the WHERE rule: WHERE and where_no_geometry.
+   The second argument is always a column name in a table.  So an
+   example of a table upload would be
+
+   INTERSECTS(CIRCLE('J2000',TAP_UPLOAD.ra,TAP_UPLOAD.dec,TAP_UPLOAD.r),
+              dbtable.s_region)
+
+   For a catalog, dbtable.s_region might be a POINT(), while for an
+   image it might be a POLYGON().  This means that users will not be
+   able to use an expression like
+
+     POINT('J2000',ra,dec)
+
+   instead of the correct column name (e.g. s_region).  This should
+   reduce errors and confusion.  Tables can support more than one
+   type of geometric search (e.g. an image table also allows searching
+   on the center of the image) by adding an appropriate column.
+
+   FIXME: Make sure this is completely implementable in GIS or spatial
+   backend.
+
+9) Make two variants of the WHERE rule: WHERE and WHERE_NO_GEOMETRY.
    For the rule with geometry, the geometric parts are constrained to
-   be cleanly segregated from the rest of the WHERE clause and consist
-   entirely of an INTERSECTS rule.
+   be cleanly segregated from the rest of the 'where' clause and
+   consist entirely of an INTERSECTS rule.  The non-geometric parts
+   must be entirely enclosed within parentheses '()'.
+
+   FIXME: I think parentheses are not really required if there is no
+   geometry.
 
 10) Make two variants of the QUERY rule: one with geometry and one
     without.  SUBQUERY's can only use the non-geometric version.
@@ -79,7 +101,186 @@ data store where the non-geometric clause is applied.
 ObsCore Use Cases
 =================
 
-TODO
+Appendix A of ObsCore lists a number of use cases.  Broadly, there are
+three types of queries: single position, multiple position via an
+uploaded table, and all-sky.  Where explicit queries are given in
+ObsCore, we provide the equivalent GADQL.
+
+Simple Examples
+***************
+
+Simple Query by Position
+------------------------
+This is a spatial query for a point.  The ObsCore query is
+
+  SELECT * FROM ivoa.Obscore WHERE
+  CONTAINS(POINT(‘ICRS’,16.0,40.0),s_region)=1
+
+In GADQL, the only change is replacing 'CONTAINS' with INTERSECTS.
+
+  SELECT * FROM ivoa.Obscore WHERE
+  INTERSECTS(POINT(‘ICRS’,16.0,40.0),s_region)=1
+
+Query Images by both Spatial and Spectral Attributes
+----------------------------------------------------
+
+This is a spatial query for a coordinate range.  The ObsCore query is
+
+  SELECT * FROM ivoa.Obscore
+  WHERE dataproduct_type=’image'
+  AND s_resolution < 0.3 AND s_ra > 240 AND s_ra < 255
+  AND s_dec > 10 AND s_dec < 11
+  AND (em_min > 2.1e-06 AND em_max < 2.4e-06)
+        OR(em_min >= 1.6e-06 AND em_max <= 1.8e-06)
+        OR(em_min >= 1.2e-06 AND em_max <= 1.4e-06)
+
+Coordinate ranges can be difficult to implement efficiently for
+specialized spatial backends.  A common use for coordinate ranges is
+to tile the sky.  This can also be done with polygons.  So a similar
+polygon query in GADQL would be
+
+  SELECT * FROM ivoa.Obscore
+  WHERE INTERSECTS(POLYGON('ICRS',240,10,240,11,255,11,255,10),s_region)=1
+  AND (dataproduct_type='image'
+       AND s_resolution < 0.3
+       AND (em_min > 2.1e-06 AND em_max < 2.4e-06)
+            OR(em_min >= 1.6e-06 AND em_max <= 1.8e-06)
+            OR(em_min >= 1.2e-06 AND em_max <= 1.4e-06))
+
+Note that the non-geometric parts have all been segregated into a
+separate clause enclosed by parentheses '()'.
+
+Datasets selection based on self criteria
+*****************************************
+
+A.1.1 Use case 1.1
+------------------
+This is a simple spatial query with additional constraints.  The
+ObsCore query is
+
+  SELECT * FROM ivoa.Obscore
+  WHERE em_min < 2.48E-10 AND em_max > 2.48 E-10
+  AND CONTAINS(POINT('ICRS',16.0,10.0),s_region) = 1
+  AND t_exptime > 10000
+
+Transforming it into a GADQL requires only a minor rearrangement
+
+  SELECT * FROM ivoa.Obscore
+  WHERE INTERSECTS(POINT('ICRS',16.0,10.0),s_region) = 1
+  AND (em_min < 2.48E-10 AND em_max > 2.48 E-10
+       AND t_exptime > 10000)
+
+Again, note that the non-geometric parts have all been segregated into
+a separate clause enclosed by parentheses '()'.
+
+A.1.2 Use case 1.2
+------------------
+This performs a cross match with an uploaded table.  Then there is
+some filtering to only return rows when there are results in both
+X-ray and the 500-900 nm band.  The ObsCore document says that this
+may require multiple steps, and there is no explicit query given.  A
+first step of the query might be
+
+  SELECT * from ivoa.Obccore
+  WHERE CONTAINS(POINT('ICRS',TAP_UPLOAD.user_table.ra,TAP_UPLOAD.user_table.dec),s_region) = 1
+  AND (dataproduct_type='image' or dataproduct_type='cube' or dataproduct_type='spectra')
+
+Transforming it to GADQL results in
+
+  SELECT * from ivoa.Obccore
+  WHERE INTERSECTS(POINT('ICRS',TAP_UPLOAD.user_table.ra,TAP_UPLOAD.user_table.dec),s_region) = 1
+  AND (dataproduct_type='image' or dataproduct_type='cube' or dataproduct_type='spectra')
+
+A.1.3 Use case 1.3
+------------------
+This is very similar use case 1.1 with different non-geometric criteria.
+
+A.1.4 Use case 1.4
+------------------
+This is an all-sky search.  No query is given, but the non-geometric
+parts should carry over directly.  The only wrinkle is that the
+non-geometric parts of the WHERE clause must be enclosed by parentheses '()'.
+
+A.1.5 Use case 1.5
+------------------
+This is also a cross match with an uploaded table.  We use the same
+strategy as in use case 1.2 to implement it.
+
+A.1.6 Use case 1.6
+------------------
+This has both a geometric and time constraint.  The ObsCore query is
+
+  SELECT * FROM ivoa.Obscore
+  WHERE dataproduct_type='image'
+  AND CONTAINS(POINT('ICRS',user_ra,user_dec), s_region) = 1
+  AND ABS((t_max + t_min)/2 – user_date ) < 1
+
+The time constraint can be handled like any other non-geometric
+constraint, so the GADQL query becomes
+
+  SELECT * FROM ivoa.Obscore
+  WHERE INTERSECTS(POINT('ICRS',user_ra,user_dec), s_region) = 1
+  AND (dataproduct_type='image'
+       AND ABS((t_max + t_min)/2 – user_date ) < 1)
+
+
+A.2 Discovering spectra data
+****************************
+
+All of the use cases in this section (2.1, 2.2, 2.3) have no geometric
+restrictions.  The only minor modification required is to enclose the
+whole WHERE clause with parentheses '()'.
+
+A.3 Discover multi-dimensional datasets
+***************************************
+
+The use cases 3.1, 3.2, 3.3, and 3.5 are all simple spatial searches
+with additional constraints.  So we use a similar strategy as in use
+case 1.1.
+
+The use case 3.4 is an all sky search, so it maps almost directly to GADQL.
+
+The use case 3.6 is a cross match, so we a similar strategy as in use
+case 1.2.
+
+FIXME: Clarify the descriptions in section A.3, since it is not clear
+exactly what query is being run.
+
+
+A.4 Discovering time series
+***************************
+
+All of the use cases in this section (4.1, 4.2, 4.3) are simple
+spatial searches with additional constraints.  So we use a similar
+strategy as in use case 1.1.
+
+A.5 Discovering event lists
+***************************
+
+A.5.1 Use case 5.1
+------------------
+This is a simple spatial search with additional constraints.  So we
+use a similar strategy as in use case 1.1.
+
+A.5.2 Use case 5.2
+------------------
+
+This use case requires checking if a polygon is completely enclosed by
+a region in the table.  This is not properly implemented by GIS
+backends, giving incorrect answers near poles and the dateline.
+(FIXME: postgis flattens.  Need to check other GIS systems)
+
+A.6. Discovering general data from collections counterparts
+***********************************************************
+
+The use cases in this section are mainly simple spatial searches with
+additional criteria.  Use case 6.1 has the additional requirement for
+cutouts, but that handled by SODA, not the TAP service.
+
+A.7. Complex Use Cases
+**********************
+These all require interactions between multiple tables in way that is
+not entirely clear even with the existing spec.
 
 Conclusion
 ==========
