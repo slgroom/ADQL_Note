@@ -37,7 +37,7 @@ term = factor (space* ('*' / '/') space* term)?
 numeric_value_expression =
   term (space* ('+' / '-') space* numeric_value_expression)?
 
-// FIXME: string_value_function should have a string_geometry_function
+// CHANGE: Remove string_geometry_function from string_value_function
 string_value_function = user_defined_function
 
 /// Flipped the order here because a value_expression_primary can
@@ -53,27 +53,24 @@ character_value_expression = character_factor
 
 string_value_expression = character_value_expression
 
-// FIXME: value_expression should also have a
-// geometry_value_expression
+concatenation_expression = character_factor space* concatenation_operator
+ space* character_value_expression
 
-/// This expression first checks for a concatenation operator.
+/// This value_expression first checks for a concatenation operator.
 /// Otherwise a numeric_value_expression would match the first
 /// half of a concatenation, meaning the concatenation operator
 /// would cause the parse to fail.  We can not put
 /// string_value_expression first, because that would partially
 /// match arithmetic.  For 'a+b', it matches 'a' but not the '+'.
 
-concatenation_expression = character_factor space* concatenation_operator
- space* character_value_expression
+// CHANGE: remove geometry_value_expression from value_expression 
 
 value_expression = concatenation_expression
   / numeric_value_expression / string_value_expression
 
 column_name = identifier
 
-/// FIXME: The 'AS' string is supposed to be optional
-
-as = value_expression space* 'AS'i space+ column_name
+as = value_expression space* ('AS'i space+)? column_name
 
 select_non_as_item = (qualifier '.*') / value_expression
 select_item = as / select_non_as_item
@@ -165,15 +162,13 @@ user_defined_function_name = default_function_prefix?
   
 user_defined_function_param = value_expression
 
-/// FIXME: This should allow zero arguments
 user_defined_function = user_defined_function_name
   space* '('
   (space* user_defined_function_param
     (space* ',' space* user_defined_function_param)*)?
   space* ')'
 
-// FIXME: numeric_value_function should have
-// numeric_geometry_function
+// CHANGE: Remove numeric_geometry_function from numeric_value_function
 numeric_value_function = trig_function / math_function
   / user_defined_function
 /// Flipped the order here, because a value_expression can match a
@@ -184,7 +179,7 @@ coord_sys = string_value_expression
 
 column_or_number = column_reference / double
 
-/// FIXME: This should be an expression, not just a number or column
+/// CHANGE: This is only a number or column instead of a generic expression
 coordinates = column_or_number space* ',' space* column_or_number
 point = 'POINT'i
   space* '('
@@ -194,25 +189,12 @@ point = 'POINT'i
   space* ')'
 point_or_column = point / column_reference
 
-// FIXME: In theory, the radius should be an expression, not a
-// number.  In practice, we can only handle numbers.
+// CHANGE: Radius and BOX sizes must be a column or number
 circle = 'CIRCLE'i
   space* '(' space*
   coord_sys
   space* ','
   space* coordinates
-  space* ','
-  space* column_or_number
-  space* ')'
-ellipse = 'ELLIPSE'i
-  space* '('
-  space* coord_sys
-  space* ','
-  space* coordinates
-  space* ','
-  space* column_or_number
-  space* ','
-  space* column_or_number
   space* ','
   space* column_or_number
   space* ')'
@@ -226,6 +208,7 @@ box = 'BOX'i
   space* ','
   space* column_or_number
   space* ')'
+
 coord_list = coordinates (space* ',' space* coordinates)*
 polygon = 'POLYGON'i space*
   '(' space* coord_sys
@@ -233,25 +216,21 @@ polygon = 'POLYGON'i space*
   space* coord_list
   space* ')'
 
-shape = point / circle / box / ellipse / polygon
+/// CHANGE: Remove centroid and region shapes
+geometry_value_function = point / circle / box / polygon
 
-/// FIXME: This should both take geometry_value_expression
-contains = 'CONTAINS'i
+/// CHANGE: Only allow column references or literal points
+intersects = 'INTERSECTS'i
   space* '('
   space* point_or_column
   space* ','
-  space* shape
-  space* ')'
-intersects = 'INTERSECTS'i
-  space* '('
-  space* column_reference
-  space* ','
-  space* shape space* ')'
+  space* geometry_value_function space* ')'
 
-/// FIXME: This should be different
-geometry = ((contains / intersects) (space* '=' space* '1')?)
-  / ('1' space* '=' space* (contains / intersects))
+/// CHANGE: Only have intersects
+predicate_geometry_function = intersects
 
+/// CHANGE: Remove non_predicate_geometry_function (area, coord[12], distance)
+  
 keyword = (ADQL_reserved_word / SQL_reserved_word) &(!identifier_character)
 
 simple_Latin_letter = [a-zA-Z]
@@ -383,7 +362,9 @@ exists_predicate= 'EXISTS'i space+ subquery
 predicate = comparison_predicate / between_predicate / in_predicate
   / null_predicate / like_predicate / exists_predicate
 
-/// FIXME: This is very different
+/// CHANGE: Make geometric and non-geometric versions of the WHERE
+/// clause.  The geometric version is constrained so that the
+/// geometric and non-geometric terms are well separated.
   
 where = 'WHERE'i &space
   space* ((geometry (space* 'AND'i
@@ -393,6 +374,9 @@ where = 'WHERE'i &space
           / ('(' space* search_condition space* ')'
              space+ ('AND'i space+ geometry))
           / search_condition)
+
+geometry = (intersects) (space* '=' space* '1')?)
+  / ('1' space* '=' space* (intersects))
 
 where_no_geometry = 'WHERE'i space+ search_condition
 
@@ -418,8 +402,6 @@ order_by_clause = 'ORDER'i &space
   space* 'BY'i &space
   space* sort_specification_list
 
-/// FIXME: This is very different
-  
 query = 'SELECT'i
   (space+ set_quantifier)?
   (space+ 'TOP'i space+ unsigned_integer)?
@@ -430,6 +412,7 @@ query = 'SELECT'i
   (space+ having_clause)?
   (space+ order_by_clause)?
 
+/// CHANGE: Use query_no_geometry instead of query_specification in subquery
 query_no_geometry = 'SELECT'i
   (space+ set_quantifier)?
   (space+ 'TOP'i space+ unsigned_integer)?
@@ -440,7 +423,6 @@ query_no_geometry = 'SELECT'i
   (space+ having_clause)?
   (space+ order_by_clause)?
 
-/// FIXME: query_no_geometry should be query_specification
 subquery = '(' space* (query_no_geometry / joined_table) space* ')'
 /// Reverse sort to avoid early matches.
 ADQL_reserved_word = 'TRUNCATE'i / 'TOP'i

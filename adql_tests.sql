@@ -1,13 +1,12 @@
 Select ra1,dec2,flux From mytable Where Contains(Point('j2000',ra,dec),Circle('J2000',+10 , -20,-1))= 1;
-Select ra1,dec2,flux From mytable Where Contains(Point('j2000',ra,dec),Circle('J2000',+10 , -20,-1));
-Select ra1,dec2,flux From mytable Where Contains(pos,Circle('J2000',+10 , -20,-1));
+Select ra1,dec2,flux From mytable Where 1=Contains(Point('j2000',ra,dec),Circle('J2000',+10 , -20,-1));
+Select ra1,dec2,flux From mytable Where 1=Contains(pos,Circle('J2000',+10 , -20,-1));
 Select ra1,dec2,flux From mytable Where Intersects(pos,Circle('J2000',+10 , -20,-1))= 1;
-Select ra1,dec2,flux From mytable Where INTERSECTs(pos,Circle('J2000',+10 , -20,-1));
+Select ra1,dec2,flux From mytable Where 1=INTERSECTs(pos,Circle('J2000',+10 , -20,-1));
 Select ra1,dec2,flux From mytable Where Contains(Point('galactic',ra,dec),Circle('galactic',+10 , -20,-1))= 1;
 Select ra1,dec2,flux From mytable Where Contains(Point('ICRS',ra,dec),Circle('icrs',+10 , -20,-1))= 1;
 SELECT ra1 As rara, dec2, flux FROM mytable WHERE CONTAINS(POINT('J2000 Geocenter',ra,dec),CIRCLE('J2000 Geocenter',+10 , -20,-1))= 1;
 SELECT ra1 As rara, dec2, flux FROM mytable WHERE CONTAINS(POINT('J2000 Geocenter',ra,dec),BOX('J2000',+10 , -20,1,2))= 1;
-SELECT ra1 As rara, dec2, flux FROM mytable WHERE CONTAINS(POINT('J2000 Geocenter',ra,dec),ELLIPSE('J2000',+10 , -20,1,2,3))= 1;
 SELECT ra1 As rara, dec2, flux FROM mytable WHERE CONTAINS(POINT('J2000 Geocenter',ra,dec),POLYGON('J2000',0,1,2,3,4,5,6,7,8,9,10,11,12,13))= 1;
 SELECT * FROM mytable WHERE CONTAINS(POINT('J2000',mytable.ra,dec),CIRCLE('J2000',+10 , -20,-1)) = 1;
 SELECT * FROM my_table WHERE 1=CONTAINS(POINT('J2000',ra,my_table.dec),CIRCLE('J2000',+10 , -20,-1));
