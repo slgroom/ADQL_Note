@@ -56,7 +56,7 @@ string_value_expression = character_value_expression
 concatenation_expression = character_factor space* concatenation_operator
  space* character_value_expression
 
-/// This value_expression first checks for a concatenation operator.
+/// This expression first checks for a concatenation operator.
 /// Otherwise a numeric_value_expression would match the first
 /// half of a concatenation, meaning the concatenation operator
 /// would cause the parse to fail.  We can not put
@@ -187,7 +187,7 @@ point = 'POINT'i
   space* ','
   space* coordinates
   space* ')'
-point_or_column = point / column_reference
+coord_value = point / column_reference
 
 // CHANGE: Radius and BOX sizes must be a column or number
 circle = 'CIRCLE'i
@@ -222,7 +222,7 @@ geometry_value_function = point / circle / box / polygon
 /// CHANGE: Only allow column references or literal points
 intersects = 'INTERSECTS'i
   space* '('
-  space* point_or_column
+  space* coord_value
   space* ','
   space* geometry_value_function space* ')'
 
