@@ -1,3 +1,10 @@
+A proposed revision to the IVOA ADQL 2.0 standard regarding
+specification of geometric constraints within queries
+
+Walter Landry, Caltech/IPAC, December 2017
+
+
+
 Rationale
 =========
 
